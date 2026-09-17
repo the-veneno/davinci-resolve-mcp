@@ -1,0 +1,69 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  open-sync-pull-request:
+    if: github.repository == 'the-veneno/davinci-resolve-mcp'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the customization branch
+        uses: actions/checkout@v4
+        with:
+          ref: "veneno's-branch"
+          fetch-depth: 0
+
+      - name: Fetch the original repository
+        run: |
+          git remote add upstream https://github.com/samuelgursky/davinci-resolve-mcp.git
+          git fetch upstream main
+
+      - name: Check whether an update is needed
+        id: check
+        shell: bash
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish the upstream snapshot branch
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          git switch --force-create automation/sync-upstream upstream/main
+          git push --force origin automation/sync-upstream
+
+      - name: Open the synchronization pull request
+        if: steps.check.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          existing_pr="$(gh pr list \
+            --base "veneno's-branch" \
+            --head automation/sync-upstream \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+
+          if [ -z "$existing_pr" ]; then
+            gh pr create \
+              --base "veneno's-branch" \
+              --head automation/sync-upstream \
+              --title "chore: sync upstream/main" \
+              --body "Automated synchronization proposal from samuelgursky/davinci-resolve-mcp. Review tests and conflicts before merging."
+          else
+            echo "Sync pull request #$existing_pr is already open and was updated."
+          fi
